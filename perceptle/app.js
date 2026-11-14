@@ -58,7 +58,24 @@ function loadLocal(){
   try{const d=JSON.parse(localStorage.getItem(LKEY));if(d&&d.g)return fixProfile(d);}catch(e){}
   try{const o=JSON.parse(localStorage.getItem('perceive:db'));if(o&&o.list){const a=o.list[o.cur]||Object.values(o.list)[0];if(a){const u=fixProfile({...freshProfile(),...a});u.prefs={sound:o.sound!==false,brief:o.brief!==false};return u;}}}catch(e){}
   return freshProfile();}
-let LOCAL=loadLocal(),CLOUD=null,AUTH_BUSY=false;
+// Repair: older builds un-pended "the last 5 games" when a run finished, so a practice game played mid-daily
+// could leave one real daily game pending forever (stuck at 4/5 placement). Clear pending flags on games that
+// belong to a daily the player has already completed.
+function repairPending(u){let ch=false;
+  for(const d of Object.values(u.daily||{})){if(!d||!d.ids||!d.t)continue;
+    u.games.forEach(g=>{if(g.m&&d.ids.includes(g.id)&&g.t<=d.t+5e3&&g.t>=d.t-18*3600e3){delete g.m;g.k=1;ch=true;}});}
+  // Recovery: a build on Nov 13-14 2026 dropped every game record (a stray comment swallowed games.push), so the
+  // rating step crashed after test 5. Dailies still saved their summary (ids, scores, time): rebuild those games
+  // and apply the rating once, so affected players get placed with the result they actually earned.
+  const lost=Object.entries(u.daily||{}).filter(([n,d])=>d&&d.ids&&d.s&&d.s.length===d.ids.length&&d.t&&!d.rb
+    &&!u.games.some(g=>d.ids.includes(g.id)&&g.t<=d.t+5e3&&g.t>=d.t-18*3600e3)).sort((a,b)=>a[1].t-b[1].t);
+  for(const [n,d] of lost){const before=ratingOf(u);u.g=glicko(u.g,d.s.map(q=>q/100));const after=ratingOf(u);u.peak=Math.max(u.peak,after);
+    const R=Math.round(after*10)/10,gs=d.ids.map((id,k)=>({t:d.t-(d.ids.length-1-k)*1000,id,s:d.s[k],r:R,d:0}));gs.slice(0,-1).forEach(g=>g.k=1);
+    Object.assign(gs[gs.length-1],{e:1,d:Math.round((after-before)*10)/10,rl:`Daily #${n}`,ra:Math.round(d.s.reduce((a,b)=>a+b,0)/d.s.length*10)/10});
+    u.games.push(...gs);d.rb=1;ch=true;}
+  if(lost.length)u.games.sort((a,b)=>a.t-b.t);
+  return ch;}
+let LOCAL=loadLocal(),CLOUD=null,AUTH_BUSY=false;if(repairPending(LOCAL))saveDB();
 const me=()=>CLOUD?CLOUD.u:LOCAL;
 const PREF=()=>me().prefs;
 const signedIn=()=>!!CLOUD;
@@ -78,16 +95,16 @@ const dayStart=n=>D0+(n-1)*864e5;
 const dayLabel=n=>new Date(dayStart(n)+12*3600e3).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric',timeZone:'America/Los_Angeles'});
 function dailySet(n){const R=srand(n*7919+17),pool=CH.slice(0,DAILY_POOL_N);for(let i=pool.length-1;i>0;i--){const j=Math.floor(R()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
   const out=[],grp={};let aud=0;for(const c of pool){if(c.audio&&aud>=1)continue;if((grp[c.grp]||0)>=2)continue;out.push(c);if(c.audio)aud++;grp[c.grp]=(grp[c.grp]||0)+1;if(out.length===5)break;}return out;}
-let RUN=null; // {mode:'daily'|'arch', n}
+let RUN=null,RUNKEY=null; // RUN: {mode:'daily'|'arch', n}. RUNKEY tags every game of the current rated run.
 function seedFor(i){Math.random=RUN&&RUN.n?srand(RUN.n*1000+i*97+1):RNG0;}
 function startDaily(n){const u=me(),set=dailySet(n),arch=n!==dayNum();audio();
   if(u.daily[n])return dailyResults(n);
-  RUN={mode:arch?'arch':'daily',n};fullRun=false;queue=set;scores=[];idx=0;
+  RUN={mode:arch?'arch':'daily',n};RUNKEY='d'+n;fullRun=false;queue=set;scores=[];idx=0;
   if(u.dprog&&u.dprog.n===n){u.dprog.s.forEach((s,k)=>scores.push({id:set[k].id,name:set[k].name,score:s}));idx=u.dprog.s.length;}
   else{u.dprog={n,arch,s:[],ids:set.map(c=>c.id)};saveDB();}
   runStartR=ratingOf(u);runStartT=tierIdx(runStartR);runStartG=u.games.length;next();}
 function onTestDone(id,score){if(!RUN)return;const u=me();if(!u.dprog||u.dprog.n!==RUN.n)return;u.dprog.s.push(Math.round(score*10)/10);
-  if(u.dprog.s.length>=5){const p=u.dprog,total=Math.round(p.s.reduce((a,b)=>a+b,0)*10)/10;u.daily[p.n]={s:p.s,ids:p.ids,total,t:Date.now(),arch:!!p.arch,sub:false};u.dprog=null;saveDB();submitPending();}else saveDB();}
+  if(u.dprog.s.length>=5){const p=u.dprog,total=Math.round(p.s.reduce((a,b)=>a+b,0)*10)/10;u.daily[p.n]={s:p.s,ids:p.ids,total,t:Date.now(),arch:!!p.arch,sub:false};u.dprog=null;saveDB();setTimeout(submitPending,0);}else saveDB();} // after applyRun, so the row has the updated rating
 async function submitPending(){if(!CLOUD)return;const u=CLOUD.u;let ch=false;
   for(const [n,e] of Object.entries(u.daily)){if(e.arch||e.sub)continue;try{await Cloud.submitDaily(n,CLOUD.uid,{uid:CLOUD.uid,name:u.name,total:e.total,s:e.s,ids:e.ids,t:e.t,rating:Math.round(ratingOf(u))});e.sub=true;ch=true;}catch(err){console.warn(err);}}
   if(ch)saveDB();}
@@ -256,6 +273,8 @@ async function attachCloud(user,o={}){AUTH_BUSY=true;
       if(hasLocalData()&&confirm(`Import ${LOCAL.games.length} games and ${Object.keys(LOCAL.daily).length} dailies from this device into ${u.name}?`)){
         u.games=[...u.games,...LOCAL.games].sort((a,b)=>a.t-b.t);u.runs=[...u.runs,...LOCAL.runs].sort((a,b)=>a.t-b.t);for(const k in LOCAL.daily)if(!u.daily[k])u.daily[k]=LOCAL.daily[k];
         if(LOCAL.games.length>u.games.length/2){u.g=LOCAL.g;}u.peak=Math.max(u.peak,LOCAL.peak);await pushCloud();clearLocal();toast('Local progress imported.');}}
+    // fix stuck placements, and (re)write the leaderboard row for anyone placed in case an earlier save missed it
+    if(repairPending(CLOUD.u)||placed(CLOUD.u))await pushCloud();
     await submitPending();}
   finally{AUTH_BUSY=false;}}
 
