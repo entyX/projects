@@ -52,7 +52,9 @@ function trialGame(api,cfg){
     else if(r.hint)ctl.append(hint(r.hint));
     if(r.onAsk)r.onAsk(st,{done:answer,ctl});}
   function answer(v){if(!st||st.phase!=='ask')return;st.phase='reveal';st.v=v;st.tr=performance.now();const rt=st.tr-st.ta;
-    let s=v==null&&!r.allowNull?0:r.score?r.score(v,rt,st):(v===r.answer?100:0);s=isFinite(s)?clamp(s,0,100):0;st.s=s;res.push(s);c.style.cursor='default';
+    // Untimed multiple choice: accuracy decides, speed is a quiet tiebreak (correct = 92..100, slower = lower; wrong = 0).
+    const tie=()=>100-8*(1-Math.exp(-Math.max(0,rt-1000)/5000));
+    let s=v==null&&!r.allowNull?0:r.score?r.score(v,rt,st):(v===r.answer?(!r.limit&&(r.mode==='choice'||r.mode==='click')?tie():100):0);s=isFinite(s)?clamp(s,0,100):0;st.s=s;res.push(s);c.style.cursor='default';
     if(st.btns)st.btns.forEach((b,k)=>{b.disabled=true;if(k===r.answer)b.classList.add('okb');else if(k===v)b.classList.add('badb');});else ctl.innerHTML='';
     const d=r.detail?r.detail(v,s,st):null;
     status.innerHTML=d!=null?d:v==null?'<b class="b">Out of time</b>':s>=50?'<b class="g">Correct</b>':'<b class="b">Wrong</b>';

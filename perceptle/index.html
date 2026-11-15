@@ -422,7 +422,10 @@ const rgba=(hex,a)=>{const n=parseInt(hex.slice(1),16);return `rgba(${n>>16},${n
 
 // Scoring: smooth bell curve. Flat near zero (lenient on close calls), then falls off. One decimal.
 // p=2 → gentle near zero, steepening with error ("exponential to" a harsher level); p=1.5 → steadier fall-off ("always").
-const soft=(e,k,p=2)=>Math.round(1000*Math.exp(-((Math.max(0,e)/k)**p)))/10;
+// Error → score. Log-logistic: nearly flat for small errors (a good estimate keeps ~95+), 50 at 1.6k, gentle tail.
+// (p is accepted for old call sites but no longer changes the shape.)
+const soft=(e,k,p)=>Math.round(1000/(1+(Math.max(0,e)/(1.6*k))**2.2))/10;
+const softX=(e,k,p=2)=>Math.round(1000*Math.exp(-((Math.max(0,e)/k)**p)))/10; // old steep curve, for reflex tests
 const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
 function cdown(x,c,t,st){const k=3-Math.floor(t/650);if(k<=0)return true;if(k!==st.k){st.k=k;sfx(523,.07,.08);}
   const f=(t%650)/650,cx=c.W/2,cy=c.H/2;x.lineWidth=4;x.lineCap='round';x.strokeStyle=C.line;x.beginPath();x.arc(cx,cy,48,0,Math.PI*2);x.stroke();
@@ -513,7 +516,7 @@ function recordGame(id,score,rated,raw){
 function applyRun(list,label){
   const u=me(),before=ratingOf(u),wasPlaced=placed(u),rated=u.games.filter(g=>!g.p&&!g.m),last=rated.length?rated[rated.length-1].t:u.created;
   u.g.rd=Math.min(350,Math.sqrt(u.g.rd**2+225*Math.max(0,(Date.now()-last)/864e5))); // RD grows while inactive
-  u.g=glicko(u.g,list.map(s=>s/100));
+  u.g=glicko(u.g,list.map(s=>toRate(s)/100)); // ratings use the old 60-centred scale
   const after=ratingOf(u);u.peak=Math.max(u.peak,after);
   // un-pend exactly this run's games (not just the last N: practice games or reloads can sit in between)
   let mine=RUNKEY?u.games.filter(g=>g.m===RUNKEY):[];if(mine.length<list.length)mine=u.games.slice(-list.length);
@@ -1227,7 +1230,7 @@ function reactionGame(api){
     if(phase==='idle'||phase==='false')return begin();
     if(phase==='lights'){falses++;if(falses>=2){phase='done';api.finish(0,'Two false starts. Wait for the green next time!');}else{phase='false';controls();}return;}
     if(phase==='go'){rt=performance.now()-goShown;phase='done';
-      api.finish(soft(rt-180,196),`Reaction time <b>${Math.round(rt)} ms</b>. Most people land between 200 and 300 ms.`);}
+      api.finish(softX(rt-180,196),`Reaction time <b>${Math.round(rt)} ms</b>. Most people land between 200 and 300 ms.`);}
   }
   loop(now=>{
     bg(x,c);
@@ -1431,7 +1434,7 @@ function shapeGame(api){
   listen(c,'pointerup',()=>{drag=null;if(phase==='edit')c.style.cursor='grab';});
   listen(window,'keydown',e=>{if(phase==='edit'&&e.key==='Enter'&&e.target.tagName!=='BUTTON'){e.preventDefault();submit();}});
   function submit(){if(phase!=='edit')return;phase='reveal';revAt=performance.now();c.style.cursor='default';
-    const L=(e,k)=>Math.exp(-((Math.max(0,e)/k)**1.5)); // LSF, steady
+    const L=(e,k)=>1/(1+(Math.max(0,e)/(1.6*k))**2.2); // same forgiving curve as soft()
     const a=oklab(hsl2rgb(T.h,T.s,T.l)),b=oklab(hsl2rgb(Y.h,Y.s,Y.l)),cd=Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]); // perceptual (OKLab) distance
     const sym=SYM[T.shape];let rd=0;if(sym){rd=((Y.rot-T.rot)%sym+sym)%sym;rd=Math.min(rd,sym-rd);}
     const sub={Shape:Y.shape===T.shape?1:0,Color:L(cd,.17),Size:L(Math.abs(Math.log(Y.size/T.size)),.3),Position:L(Math.hypot(Y.x-T.x,Y.y-T.y),80),Rotation:sym?L(rd,Math.min(30,sym/3)):1};

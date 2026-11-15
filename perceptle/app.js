@@ -13,26 +13,28 @@ const GROUPS=['Memory','Spatial','Visual','Estimation','Physics','Timing','Refle
 // logit(cal) = logit(raw) + logit(CAL_T) - logit(PAR). PAR lands exactly on CAL_T, 0 stays 0 and 100 stays 100.
 // Easy tests (high PAR) shift down, so they score stricter. Hard tests (low PAR) shift up, so they score more leniently. The same player should then total about the same on any daily, whatever tests it draws.
 // Tune a PAR toward that test's real median raw score (games store it as g.w) when you have data.
-const CAL_T=60;
+const CAL_T=70; // an average player scores ~70 on every test: a reasonable effort should feel good
+// The rating ladder was tuned when the average sat at 60, so ratings are fed the old-scale equivalent of each score.
+const toRate=s=>{const q=clamp(s/100,.0005,.9995);return 100/(1+Math.exp(-(Math.log(q/(1-q))-Math.log(.7/.3)+Math.log(.6/.4))));};
 const PAR={
   // originals
-  count:62,traj:62,angle:72,rhythm:68,frac:52,react:80,arrows:58,memory:75,timer:78,shape:72,
+  count:89,traj:86,angle:91,rhythm:89,frac:82,react:80,arrows:58,memory:75,timer:95,shape:93,
   // memory
   flash:62,grid:74,seqmem:72,color:52,digits:72,order:68,disappear:62,
   // visual
-  match:72,find:66,follow:74,symmetry:72,pattern:54,sequence:72,blur:64,silhouette:88,focus:70,change:58,wavelength:78,odd:74,disguise:72,
+  match:72,find:66,follow:71,symmetry:72,pattern:54,sequence:72,blur:64,silhouette:88,focus:70,change:58,wavelength:78,odd:74,disguise:72,
   // spatial
-  rotate:55,depth:78,shadow:58,mirror:66,rotation:42,perspective:72,
+  rotate:55,depth:78,shadow:58,mirror:66,rotation:77,perspective:72,
   // timing
-  timing:58,pulse:42,rhythm2:50,duration:30,
+  timing:87,pulse:77,rhythm2:83,duration:69,
   // estimation
-  distance:55,length:45,overlap:50,area:32,density:72,estimate:45,
+  distance:85,length:79,overlap:82,area:70,density:72,estimate:79,
   // physics
-  speed:76,weight:72,volume:64,direction:54,balance:80,reflection:45,accel:72,orbit:42,
+  speed:73,weight:69,volume:61,direction:85,balance:77,reflection:79,accel:69,orbit:77,
   // audio
-  pitch:74,echo:50,frequency:58,soundloc:70,
+  pitch:71,echo:48,frequency:56,soundloc:70,
 };
-const logit=p=>Math.log(p/(1-p)),calShift=id=>logit(CAL_T/100)-logit(clamp(PAR[id]||CAL_T,10,95)/100);
+const logit=p=>Math.log(p/(1-p)),calShift=id=>logit(CAL_T/100)-logit(clamp(PAR[id]||CAL_T,10,97)/100);
 function calibrate(id,raw){raw=clamp(isFinite(raw)?raw:0,0,100);if(raw<=0||raw>=100)return raw;const q=clamp(raw/100,.0005,.9995);return Math.round(1000/(1+Math.exp(-(logit(q)+calShift(id)))))/10;}
 const DAILY_POOL_N=58; // freeze the daily pool so archived dailies never change
 const iconOf=c=>ICON[c.id]||GICON[c.grp];
@@ -69,7 +71,7 @@ function repairPending(u){let ch=false;
   // and apply the rating once, so affected players get placed with the result they actually earned.
   const lost=Object.entries(u.daily||{}).filter(([n,d])=>d&&d.ids&&d.s&&d.s.length===d.ids.length&&d.t&&!d.rb
     &&!u.games.some(g=>d.ids.includes(g.id)&&g.t<=d.t+5e3&&g.t>=d.t-18*3600e3)).sort((a,b)=>a[1].t-b[1].t);
-  for(const [n,d] of lost){const before=ratingOf(u);u.g=glicko(u.g,d.s.map(q=>q/100));const after=ratingOf(u);u.peak=Math.max(u.peak,after);
+  for(const [n,d] of lost){const before=ratingOf(u);u.g=glicko(u.g,d.s.map(q=>q/100)); // lost dailies all came from the 60-centred build, so no toRateconst after=ratingOf(u);u.peak=Math.max(u.peak,after);
     const R=Math.round(after*10)/10,gs=d.ids.map((id,k)=>({t:d.t-(d.ids.length-1-k)*1000,id,s:d.s[k],r:R,d:0}));gs.slice(0,-1).forEach(g=>g.k=1);
     Object.assign(gs[gs.length-1],{e:1,d:Math.round((after-before)*10)/10,rl:`Daily #${n}`,ra:Math.round(d.s.reduce((a,b)=>a+b,0)/d.s.length*10)/10});
     u.games.push(...gs);d.rb=1;ch=true;}
